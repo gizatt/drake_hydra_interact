@@ -137,7 +137,7 @@ class HydraInteractionLeafSystem(LeafSystem):
         self.sg = sg
         self.hasNewMessage = False
         self.lastMsg = None
-        self.hydra_origin = RigidTransform(p=[0.8, 0., -0.15],
+        self.hydra_origin = RigidTransform(p=[1.0, 0., -0.1],
                                    rpy=RollPitchYaw([0., 0., 0.]))
         self.hydra_prescale = 3.0
 
@@ -174,9 +174,13 @@ class HydraInteractionLeafSystem(LeafSystem):
             if self.attract_factor > 0.01:
                 xyz_desired = (self.desired_pose_in_world_frame.translation()*self.attract_factor +
                                xyz_desired*(1.-self.attract_factor))
+                # Recalibrate offset so it sticks.
+                # Don't do this all the time, as it causes a slow drift of the object offset that
+                # causes the object to droop.
                 self.grab_update_hydra_pose = self.desired_pose_in_world_frame
                 self.selected_body_init_offset = TF_object
-
+            # Could also pull the rotation back, but it's kind of nice to be able to recenter the object
+            # without messing up a randomized rotation.
             #R_desired = (self.desired_pose_in_world_frame.rotation().matrix()*self.attract_factor +
             #             R_desired*(1.-self.attract_factor))
 
@@ -285,7 +289,7 @@ class HydraInteractionLeafSystem(LeafSystem):
 def do_main():
     rospy.init_node('run_dishrack_interaction', anonymous=False)
     
-    np.random.seed(42)
+    #np.random.seed(42)
     
     builder = DiagramBuilder()
     mbp, scene_graph = AddMultibodyPlantSceneGraph(
@@ -316,7 +320,7 @@ def do_main():
         #"/home/gizatt/drake/manipulation/models/dish_models/plate_8p5in_decomp/plate_8p5in_decomp.urdf",
     ]
 
-    n_objects = np.random.randint(1, 2)
+    n_objects = 1
     poses = []  # [quat, pos]
     classes = []
     for k in range(n_objects):
@@ -327,9 +331,15 @@ def do_main():
         parser.AddModelFromFile(class_path, model_name=model_name)
         poses.append([
             RollPitchYaw(np.random.uniform(0., 2.*np.pi, size=3)).ToQuaternion().wxyz(),
-            [np.random.uniform(-0.8, 0.8),
-             np.random.uniform(-0.8, 0.8),
-             np.random.uniform(0.2, 0.5)]])
+            [np.random.uniform(-0.1, -0.1),
+             np.random.uniform(0., 0.0),
+             np.random.uniform(0.1, 0.1)]])
+
+    # Build a desk
+    parser.AddModelFromFile("cupboard_without_doors.sdf")
+    mbp.WeldFrames(world_body.body_frame(), mbp.GetBodyByName("cupboard_body").body_frame(),
+                   Isometry3(rotation=np.eye(3), translation=[0.25, 0, 0.3995 + 0.016/2]))
+    
 
     mbp.AddForceElement(UniformGravityFieldElement())
     mbp.Finalize()
