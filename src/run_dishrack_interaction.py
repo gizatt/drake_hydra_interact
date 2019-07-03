@@ -163,23 +163,20 @@ class HydraInteractionLeafSystem(LeafSystem):
             xyzd = TFd_object.translational()
             Rd = TFd_object.rotational()
 
-            desired_pose = self.grab_update_hydra_pose.inverse().multiply(self.desired_pose_in_world_frame)
+            desired_delta_pose = self.grab_update_hydra_pose.inverse().multiply(self.desired_pose_in_world_frame)
 
             # Apply this delta to the current object pose to get the desired final
             # pose.
             # Add the translations straight-up
-            xyz_desired = self.selected_body_init_offset.translation() + desired_pose.translation()
-            R_desired = desired_pose.matrix()[:3, :3].dot(self.selected_body_init_offset.rotation().matrix())
+            xyz_desired = self.desired_pose_in_world_frame.translation()
 
             # Regress xyz back to just the hydra pose in the attraction case
-            if self.attract_factor > 0.01:
-                xyz_desired = (self.desired_pose_in_world_frame.translation()*self.attract_factor +
-                               xyz_desired*(1.-self.attract_factor))
-                # Recalibrate offset so it sticks.
-                # Don't do this all the time, as it causes a slow drift of the object offset that
-                # causes the object to droop.
+            if self.freeze_rotation:
                 self.grab_update_hydra_pose = self.desired_pose_in_world_frame
                 self.selected_body_init_offset = TF_object
+                R_desired = self.selected_body_init_offset.rotation().matrix()
+            else:
+                R_desired = desired_delta_pose.matrix()[:3, :3].dot(self.selected_body_init_offset.rotation().matrix())
             # Could also pull the rotation back, but it's kind of nice to be able to recenter the object
             # without messing up a randomized rotation.
             #R_desired = (self.desired_pose_in_world_frame.rotation().matrix()*self.attract_factor +
@@ -260,7 +257,7 @@ class HydraInteractionLeafSystem(LeafSystem):
         elif self.grab_in_progress and not pad_info.buttons[0]:
             self.grab_in_progress = False
 
-        self.attract_factor = pad_info.trigger
+        self.freeze_rotation = pad_info.trigger > 0.15
 
         if pad_info.buttons[5]:
             self.stop = True
