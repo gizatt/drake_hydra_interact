@@ -4,15 +4,16 @@ from __future__ import print_function
 import sys
 import os
 import numpy as np
+import random
 import time
 
 # ROS
-import rospy
-import sensor_msgs.msg
-import geometry_msgs.msg
-import tf2_ros
-import tf
-import razer_hydra.msg
+#import rospy
+#import sensor_msgs.msg
+#import geometry_msgs.msg
+#import tf2_ros
+#import tf
+#import razer_hydra.msg
 
 import meshcat
 import meshcat.geometry as meshcat_geom
@@ -48,7 +49,7 @@ from pydrake.multibody.plant import (
 from pydrake.forwarddiff import gradient
 from pydrake.multibody.parsing import Parser
 from pydrake.multibody.inverse_kinematics import InverseKinematics
-from pydrake.solvers.mathematicalprogram import (SolverOptions)
+import pydrake.solvers.mathematicalprogram as mp
 from pydrake.solvers.ipopt import (IpoptSolver)
 from pydrake.solvers.nlopt import (NloptSolver)
 from pydrake.solvers.snopt import (SnoptSolver)
@@ -294,7 +295,7 @@ class HydraInteractionLeafSystem(LeafSystem):
 
 
 def do_main():
-    rospy.init_node('run_dishrack_interaction', anonymous=False)
+    #rospy.init_node('run_dishrack_interaction', anonymous=False)
     
     #np.random.seed(42)
     
@@ -310,57 +311,75 @@ def do_main():
             mass=10.0, p_PScm_E=np.array([0., 0., 0.]),
             G_SP_E=UnitInertia(1.0, 1.0, 1.0)))
         mbp.WeldFrames(world_body.body_frame(), ground_body.body_frame(),
-                       Isometry3(rotation=np.eye(3), translation=[0, 0, -1]))
+                       RigidTransform(p=[0, 0, -1]))
         mbp.RegisterVisualGeometry(
-            ground_body, Isometry3(), ground_shape, "ground_vis",
+            ground_body, RigidTransform.Identity(), ground_shape, "ground_vis",
             np.array([0.5, 0.5, 0.5, 1.]))
         mbp.RegisterCollisionGeometry(
-            ground_body, Isometry3(), ground_shape, "ground_col",
+            ground_body, RigidTransform.Identity(), ground_shape, "ground_col",
             CoulombFriction(0.9, 0.8))
 
         parser = Parser(mbp, scene_graph)
 
-        candidate_model_files = [
-            "/home/gizatt/drake/manipulation/models/mug/mug.urdf",
+        drake_dir = os.getenv("DRAKE_RESOURCE_ROOT")
+        dish_bin_model = drake_dir + "/examples/manipulation_station/models/bin.sdf"
+        candidate_model_files = {
+            "mug": "/home/gizatt/drake/manipulation/models/mug/mug.urdf",
+            "plate_11in": "/home/gizatt/drake/manipulation/models/dish_models/plate_11in_decomp/plate_11in_decomp.urdf",
             #"/home/gizatt/drake/manipulation/models/mug_big/mug_big.urdf",
             #"/home/gizatt/drake/manipulation/models/dish_models/bowl_6p25in_decomp/bowl_6p25in_decomp.urdf",
-            #"/home/gizatt/drake/manipulation/models/dish_models/plate_11in_decomp/plate_11in_decomp.urdf",
             #"/home/gizatt/drake/manipulation/models/dish_models/plate_8p5in_decomp/plate_8p5in_decomp.urdf",
-        ]
+        }
 
-        n_objects = 1
+        # Decide how many of each object to add
+        max_num_objs = 4
+        num_objs = [np.random.randint(0, max_num_objs) for k in range(len(candidate_model_files.keys()))]
+
+        # Actually produce their initial poses + add them to the sim
         poses = []  # [quat, pos]
-        classes = []
-        for k in range(n_objects):
-            model_name = "model_%d" % k
-            model_ind = np.random.randint(0, len(candidate_model_files))
-            class_path = candidate_model_files[model_ind]
-            classes.append(class_path)
-            parser.AddModelFromFile(class_path, model_name=model_name)
-            poses.append([
-                RollPitchYaw(np.random.uniform(0., 2.*np.pi, size=3)).ToQuaternion().wxyz(),
-                [np.random.uniform(-0.1, -0.1),
-                 np.random.uniform(0., 0.0),
-                 np.random.uniform(0.1, 0.1)]])
+        all_object_instances = []
+        total_num_objs = sum(num_objs)
+        object_ordering = list(range(total_num_objs))
+        k = 0
+        random.shuffle(object_ordering)
+        print("ordering: ", object_ordering)
+        for class_k, class_entry in enumerate(candidate_model_files.items()):
+            for model_instance_k in range(num_objs[class_k]):
+                class_name, class_path = class_entry
+                model_name = "%s_%d" % (class_name, model_instance_k)
+                all_object_instances.append([class_name, model_name])
+                parser.AddModelFromFile(class_path, model_name=model_name)
+
+                # Put them in a randomly ordered line, for placing
+                #y_offset = (object_ordering[k] / float(total_num_objs) - 0.5)   #  RAnge -0.5 to 0.5
+                #poses.append([
+                #    RollPitchYaw(np.random.uniform(0., 2.*np.pi, size=3)).ToQuaternion().wxyz(),
+                #    [-0.25, y_offset, 0.1]])
+                #k += 1
+                poses.append([
+                    RollPitchYaw(np.random.uniform(0., 2.*np.pi, size=3)).ToQuaternion().wxyz(),
+                    [np.random.uniform(0., 0.2), np.random.uniform(0., 0.2), np.random.uniform(0.1, 0.3)]])
 
         # Build a desk
-        parser.AddModelFromFile("cupboard_without_doors.sdf")
-        mbp.WeldFrames(world_body.body_frame(), mbp.GetBodyByName("cupboard_body").body_frame(),
-                       Isometry3(rotation=np.eye(3), translation=[0.25, 0, 0.3995 + 0.016/2]))
-        
+        #parser.AddModelFromFile("cupboard_without_doors.sdf")
+        #mbp.WeldFrames(world_body.body_frame(), mbp.GetBodyByName("cupboard_body").body_frame(),
+        #               RigidTransform(p=[0.25, 0, 0.3995 + 0.016/2])))
+        parser.AddModelFromFile(dish_bin_model)
+        mbp.WeldFrames(world_body.body_frame(), mbp.GetBodyByName("bin_base").body_frame(),
+                       RigidTransform(p=[0.25, 0, 0.]))
 
         mbp.AddForceElement(UniformGravityFieldElement())
         mbp.Finalize()
 
-        hydra_sg_spy = builder.AddSystem(HydraInteractionLeafSystem(mbp, scene_graph))
-        builder.Connect(scene_graph.get_query_output_port(),
-                        hydra_sg_spy.get_input_port(0))
-        builder.Connect(scene_graph.get_pose_bundle_output_port(),
-                        hydra_sg_spy.get_input_port(1))
-        builder.Connect(mbp.get_state_output_port(),
-                        hydra_sg_spy.get_input_port(2))
-        builder.Connect(hydra_sg_spy.get_output_port(0),
-                        mbp.get_applied_spatial_force_input_port())
+        #hydra_sg_spy = builder.AddSystem(HydraInteractionLeafSystem(mbp, scene_graph))
+        #builder.Connect(scene_graph.get_query_output_port(),
+        #                hydra_sg_spy.get_input_port(0))
+        #builder.Connect(scene_graph.get_pose_bundle_output_port(),
+        #                hydra_sg_spy.get_input_port(1))
+        #builder.Connect(mbp.get_state_output_port(),
+        #                hydra_sg_spy.get_input_port(2))
+        #builder.Connect(hydra_sg_spy.get_output_port(0),
+        #                mbp.get_applied_spatial_force_input_port())
 
         visualizer = builder.AddSystem(MeshcatVisualizer(
             scene_graph,
@@ -443,11 +462,12 @@ def do_main():
         #prog.SetSolverOption(sid, "Major step limit", 2)
 
         print("Solver opts: ", prog.GetSolverOptions(solver.solver_type()))
-        print(solver.Solve(prog))
+        result = mp.Solve(prog)
+        print("Solve info: ", result)
         print("Solved in %f seconds" % (time.time() - start_time))
-        #print IpoptSolver().Solve(prog)
-        print(prog.GetSolverId().name())
-        q0_proj = prog.GetSolution(q_dec)
+        #print(IpoptSolver().Solve(prog))
+        print(result.get_solver_id().name())
+        q0_proj = result.GetSolution(q_dec)
     #            print "Final: ", q0_proj
         mbp.SetPositions(mbp_context, q0_proj)
 
