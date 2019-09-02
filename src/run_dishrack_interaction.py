@@ -1,4 +1,5 @@
 #! /usr/bin/env python
+from __future__ import print_function
 
 import sys
 import os
@@ -442,10 +443,10 @@ def do_main():
         #prog.SetSolverOption(sid, "Major step limit", 2)
 
         print("Solver opts: ", prog.GetSolverOptions(solver.solver_type()))
-        print solver.Solve(prog)
-        print "Solved in %f seconds" % (time.time() - start_time)
+        print(solver.Solve(prog))
+        print("Solved in %f seconds" % (time.time() - start_time))
         #print IpoptSolver().Solve(prog)
-        print prog.GetSolverId().name()
+        print(prog.GetSolverId().name())
         q0_proj = prog.GetSolution(q_dec)
     #            print "Final: ", q0_proj
         mbp.SetPositions(mbp_context, q0_proj)
