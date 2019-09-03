@@ -321,10 +321,10 @@ def do_main():
 
         parser = Parser(mbp, scene_graph)
 
-        drake_dir = os.getenv("DRAKE_RESOURCE_ROOT")
-        dish_bin_model = drake_dir + "/examples/manipulation_station/models/bin.sdf"
+        dish_bin_model = "/home/gizatt/projects/scene_generation/models/dish_models/bus_tub_01_decomp/bus_tub_01_decomp.urdf"
         candidate_model_files = {
-            "mug": "/home/gizatt/drake/manipulation/models/mug/mug.urdf",
+            #"mug": "/home/gizatt/drake/manipulation/models/mug/mug.urdf",
+            "mug": "/home/gizatt/projects/scene_generation/models/dish_models/mug_1_decomp/mug_1_decomp.urdf",
             "plate_11in": "/home/gizatt/drake/manipulation/models/dish_models/plate_11in_decomp/plate_11in_decomp.urdf",
             #"/home/gizatt/drake/manipulation/models/mug_big/mug_big.urdf",
             #"/home/gizatt/drake/manipulation/models/dish_models/bowl_6p25in_decomp/bowl_6p25in_decomp.urdf",
@@ -358,15 +358,15 @@ def do_main():
                 #k += 1
                 poses.append([
                     RollPitchYaw(np.random.uniform(0., 2.*np.pi, size=3)).ToQuaternion().wxyz(),
-                    [np.random.uniform(0., 0.2), np.random.uniform(0., 0.2), np.random.uniform(0.1, 0.3)]])
+                    [np.random.uniform(-0.2, 0.2), np.random.uniform(-0.1, 0.1), np.random.uniform(0.1, 0.3)]])
 
         # Build a desk
         #parser.AddModelFromFile("cupboard_without_doors.sdf")
         #mbp.WeldFrames(world_body.body_frame(), mbp.GetBodyByName("cupboard_body").body_frame(),
         #               RigidTransform(p=[0.25, 0, 0.3995 + 0.016/2])))
         parser.AddModelFromFile(dish_bin_model)
-        mbp.WeldFrames(world_body.body_frame(), mbp.GetBodyByName("bin_base").body_frame(),
-                       RigidTransform(p=[0.25, 0, 0.]))
+        mbp.WeldFrames(world_body.body_frame(), mbp.GetBodyByName("bus_tub_01_decomp_body_link").body_frame(),
+                       RigidTransform(p=[0.0, 0., 0.], rpy=RollPitchYaw(np.pi/2., 0., 0.)))
 
         mbp.AddForceElement(UniformGravityFieldElement())
         mbp.Finalize()
