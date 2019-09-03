@@ -468,13 +468,14 @@ def do_main():
                     q_dec[(k*7+4):(k*7+7)])
 
             def vis_callback(x):
-                mbp.SetPositions(mbp_context, x)
-                pose_bundle = scene_graph.get_pose_bundle_output_port().Eval(sg_context)
+                vis_diagram_context = diagram.CreateDefaultContext()
+                mbp.SetPositions(diagram.GetMutableSubsystemContext(mbp, vis_diagram_context), x)
+                pose_bundle = scene_graph.get_pose_bundle_output_port().Eval(diagram.GetMutableSubsystemContext(scene_graph, vis_diagram_context))
                 context = visualizer.CreateDefaultContext()
                 context.FixInputPort(0, AbstractValue.Make(pose_bundle))
                 visualizer.Publish(context)
 
-            #prog.AddVisualizationCallback(vis_callback, q_dec)
+            prog.AddVisualizationCallback(vis_callback, q_dec)
             prog.AddQuadraticErrorCost(np.eye(q0.shape[0])*1.0, q0, q_dec)
 
             ik.AddMinimumDistanceConstraint(0.001, threshold_distance=1.0)
@@ -516,6 +517,7 @@ def do_main():
             print(colored("Stopped, restarting", 'yellow'))
         except Exception as e:
             print(colored("Suffered other exception " + str(e), "red"))
+            sys.exit(-1)
         except:
             print(colored("Suffered totally unknown exception! Probably sim.", "red"))
 
