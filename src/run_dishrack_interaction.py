@@ -188,8 +188,14 @@ class HydraInteractionLeafSystem(LeafSystem):
                 R_desired = self.selected_body_init_offset.rotation().matrix()
             else:
                 # Figure out the relative rotation of the hydra from its initial posture
-                desired_delta_rotation = self.grab_update_hydra_pose.inverse().multiply(self.desired_pose_in_world_frame).matrix()[:3, :3]
-                R_desired = desired_delta_rotation.dot(self.selected_body_init_offset.rotation().matrix())
+                to_init_hydra_tf = self.grab_update_hydra_pose.inverse()
+                desired_delta_rotation = to_init_hydra_tf.multiply(self.desired_pose_in_world_frame).matrix()[:3, :3]
+                # Transform the current object rotation into the init hydra frame, apply that relative tf, and
+                # then transform back
+                to_init_hydra_tf_rot = to_init_hydra_tf.matrix()[:3, :3]
+                R_desired = to_init_hydra_tf_rot.T.dot(
+                    desired_delta_rotation.dot(to_init_hydra_tf_rot.dot(
+                        self.selected_body_init_offset.rotation().matrix())))
 
             # Could also pull the rotation back, but it's kind of nice to be able to recenter the object
             # without messing up a randomized rotation.
