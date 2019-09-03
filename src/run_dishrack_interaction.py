@@ -8,12 +8,12 @@ import random
 import time
 
 # ROS
-#import rospy
-#import sensor_msgs.msg
-#import geometry_msgs.msg
-#import tf2_ros
-#import tf
-#import razer_hydra.msg
+import rospy
+import sensor_msgs.msg
+import geometry_msgs.msg
+import tf2_ros
+import tf
+import razer_hydra.msg
 
 import meshcat
 import meshcat.geometry as meshcat_geom
@@ -81,21 +81,26 @@ class HydraInteractionLeafSystem(LeafSystem):
     ''' Handles comms with the Hydra, and uses QueryObject inputs from the SceneGraph
     to pick closests points when required. Passes this information to the HydraInteractionForceElement
     at every update tick.'''
-    def __init__(self, mbp, sg, zmq_url="default"):
+    def __init__(self, mbp, sg, all_manipulable_body_ids=[], zmq_url="default"):
         LeafSystem.__init__(self)
-
+        self.all_manipulable_body_ids = all_manipulable_body_ids
         self.set_name('HydraInteractionLeafSystem')
 
         # Pose bundle (from SceneGraph) input port.
-        self.DeclareAbstractInputPort("query_object",
-                                      AbstractValue.Make(sg.get_query_output_port().Eval(sg.CreateDefaultContext())))
-        self.DeclareAbstractInputPort("pose_bundle",
-                                      AbstractValue.Make(PoseBundle(0)))
-        self.DeclareVectorInputPort("robot_state", BasicVector(mbp.num_positions() + mbp.num_velocities()))
-        self.DeclareAbstractOutputPort(
-                        "spatial_forces_vector",
-                        lambda: AbstractValue.Make(VectorExternallyAppliedSpatialForced()),
-                        self.DoCalcAbstractOutput)
+        #default_sg_context = sg.CreateDefaultContext()
+        #print("Default sg context: ", default_sg_context)
+        #query_object = sg.get_query_output_port().Eval(default_sg_context)
+        #print("Query object: ", query_object)
+        #self.DeclareAbstractInputPort("query_object",
+        #                              AbstractValue.Make(query_object))
+        self.pose_bundle_input_port = self.DeclareAbstractInputPort(
+            "pose_bundle", AbstractValue.Make(PoseBundle(0)))
+        self.robot_state_input_port = self.DeclareVectorInputPort(
+            "robot_state", BasicVector(mbp.num_positions() + mbp.num_velocities()))
+        self.spatial_forces_output_port = self.DeclareAbstractOutputPort(
+            "spatial_forces_vector",
+            lambda: AbstractValue.Make(VectorExternallyAppliedSpatialForced()),
+            self.DoCalcAbstractOutput)
         self.DeclarePeriodicPublish(0.01, 0.0)
 
 
@@ -156,7 +161,7 @@ class HydraInteractionLeafSystem(LeafSystem):
             body = self.selected_body
 
             # Load in robot state
-            x_in = self.EvalVectorInput(context, 2).get_value()
+            x_in = self.EvalVectorInput(context, 1).get_value()
             self.mbp.SetPositionsAndVelocities(self.mbp_context, x_in)
             TF_object = self.mbp.EvalBodyPoseInWorld(self.mbp_context, body)
             xyz = TF_object.translation()
@@ -216,9 +221,9 @@ class HydraInteractionLeafSystem(LeafSystem):
             if context.get_time() > 0.5:
                 raise StopIteration
 
-        query_object = self.EvalAbstractInput(context, 0).get_value()
-        pose_bundle = self.EvalAbstractInput(context, 1).get_value()
-        x_in = self.EvalVectorInput(context, 2).get_value()
+        #query_object = self.EvalAbstractInput(context, 0).get_value()
+        pose_bundle = self.EvalAbstractInput(context, 0).get_value()
+        x_in = self.EvalVectorInput(context, 1).get_value()
         self.mbp.SetPositionsAndVelocities(self.mbp_context, x_in)
         
         if self.grab_needs_update:
@@ -226,8 +231,20 @@ class HydraInteractionLeafSystem(LeafSystem):
             self.grab_needs_update = False
             # If grab point is colliding...
             #print [x.distance for x in query_object.ComputeSignedDistanceToPoint(hydra_tf.matrix()[:3, 3])]
-            # Always just grab object 2. (The first object on the table.)
-            self.selected_body = self.mbp.get_body(BodyIndex(2))
+            # Find closest body to current pose
+
+            grab_center = hydra_tf.matrix()[:3, 3]
+            closest_distance = np.inf
+            closest_body = self.mbp.get_body(BodyIndex(2))
+            for body_id in self.all_manipulable_body_ids:
+                body = self.mbp.get_body(body_id)
+                offset = self.mbp.EvalBodyPoseInWorld(self.mbp_context, body)
+                dist = np.linalg.norm(grab_center - offset.translation())
+                if dist < closest_distance:
+                    closest_distance = dist
+                    closest_body = body
+
+            self.selected_body = closest_body
             self.selected_body_init_offset = self.mbp.EvalBodyPoseInWorld(
                 self.mbp_context, self.selected_body)
 
@@ -258,6 +275,7 @@ class HydraInteractionLeafSystem(LeafSystem):
             self.grab_in_progress = True
         elif self.grab_in_progress and not pad_info.buttons[0]:
             self.grab_in_progress = False
+            self.selected_body = None
 
         self.freeze_rotation = pad_info.trigger > 0.15
 
@@ -295,7 +313,7 @@ class HydraInteractionLeafSystem(LeafSystem):
 
 
 def do_main():
-    #rospy.init_node('run_dishrack_interaction', anonymous=False)
+    rospy.init_node('run_dishrack_interaction', anonymous=False)
     
     #np.random.seed(42)
     
@@ -338,6 +356,7 @@ def do_main():
         # Actually produce their initial poses + add them to the sim
         poses = []  # [quat, pos]
         all_object_instances = []
+        all_manipulable_body_ids = []
         total_num_objs = sum(num_objs)
         object_ordering = list(range(total_num_objs))
         k = 0
@@ -348,7 +367,8 @@ def do_main():
                 class_name, class_path = class_entry
                 model_name = "%s_%d" % (class_name, model_instance_k)
                 all_object_instances.append([class_name, model_name])
-                parser.AddModelFromFile(class_path, model_name=model_name)
+                model_id = parser.AddModelFromFile(class_path, model_name=model_name)
+                all_manipulable_body_ids += mbp.GetBodyIndices(model_id)
 
                 # Put them in a randomly ordered line, for placing
                 #y_offset = (object_ordering[k] / float(total_num_objs) - 0.5)   #  RAnge -0.5 to 0.5
@@ -371,15 +391,15 @@ def do_main():
         mbp.AddForceElement(UniformGravityFieldElement())
         mbp.Finalize()
 
-        #hydra_sg_spy = builder.AddSystem(HydraInteractionLeafSystem(mbp, scene_graph))
+        hydra_sg_spy = builder.AddSystem(HydraInteractionLeafSystem(mbp, scene_graph, all_manipulable_body_ids=all_manipulable_body_ids))
         #builder.Connect(scene_graph.get_query_output_port(),
         #                hydra_sg_spy.get_input_port(0))
-        #builder.Connect(scene_graph.get_pose_bundle_output_port(),
-        #                hydra_sg_spy.get_input_port(1))
-        #builder.Connect(mbp.get_state_output_port(),
-        #                hydra_sg_spy.get_input_port(2))
-        #builder.Connect(hydra_sg_spy.get_output_port(0),
-        #                mbp.get_applied_spatial_force_input_port())
+        builder.Connect(scene_graph.get_pose_bundle_output_port(),
+                        hydra_sg_spy.get_input_port(0))
+        builder.Connect(mbp.get_state_output_port(),
+                        hydra_sg_spy.get_input_port(1))
+        builder.Connect(hydra_sg_spy.get_output_port(0),
+                        mbp.get_applied_spatial_force_input_port())
 
         visualizer = builder.AddSystem(MeshcatVisualizer(
             scene_graph,
