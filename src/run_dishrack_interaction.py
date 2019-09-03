@@ -6,6 +6,7 @@ import os
 import numpy as np
 import random
 import time
+from threading import Lock
 
 # ROS
 import rospy
@@ -138,6 +139,8 @@ class HydraInteractionLeafSystem(LeafSystem):
         self.selected_pose_in_body_frame = None
         self.desired_pose_in_world_frame = None
         self.stop = False
+        self.freeze_rotation = False
+        self.previously_freezing_rotation = False
 
         # Set up subscription to Razer Hydra
         self.mbp = mbp
@@ -149,6 +152,7 @@ class HydraInteractionLeafSystem(LeafSystem):
                                    rpy=RollPitchYaw([0., 0., 0.]))
         self.hydra_prescale = 3.0
 
+        self.callback_lock = Lock()
         self.hydraSubscriber = rospy.Subscriber("/hydra_calib", razer_hydra.msg.Hydra, self.callback, queue_size=1)
         print("Waiting for hydra startup...")
         while not self.hasNewMessage  and not rospy.is_shutdown():
@@ -156,6 +160,8 @@ class HydraInteractionLeafSystem(LeafSystem):
         print("Got hydra.")
 
     def DoCalcAbstractOutput(self, context, y_data):
+        self.callback_lock.acquire()
+
         if self.selected_body and self.grab_in_progress:
             # Simple inverse dynamics PD rule to drive object to desired pose.
             body = self.selected_body
@@ -170,20 +176,21 @@ class HydraInteractionLeafSystem(LeafSystem):
             xyzd = TFd_object.translational()
             Rd = TFd_object.rotational()
 
-            desired_delta_pose = self.grab_update_hydra_pose.inverse().multiply(self.desired_pose_in_world_frame)
-
-            # Apply this delta to the current object pose to get the desired final
-            # pose.
-            # Add the translations straight-up
+            # Match the object position directly to the hydra position.
             xyz_desired = self.desired_pose_in_world_frame.translation()
 
             # Regress xyz back to just the hydra pose in the attraction case
-            if self.freeze_rotation:
-                self.grab_update_hydra_pose = self.desired_pose_in_world_frame
+            if self.previously_freezing_rotation != self.freeze_rotation:
                 self.selected_body_init_offset = TF_object
+                self.grab_update_hydra_pose = RigidTransform(self.desired_pose_in_world_frame)
+            self.previously_freezing_rotation = self.freeze_rotation
+            if self.freeze_rotation:
                 R_desired = self.selected_body_init_offset.rotation().matrix()
             else:
-                R_desired = desired_delta_pose.matrix()[:3, :3].dot(self.selected_body_init_offset.rotation().matrix())
+                # Figure out the relative rotation of the hydra from its initial posture
+                desired_delta_rotation = self.grab_update_hydra_pose.inverse().multiply(self.desired_pose_in_world_frame).matrix()[:3, :3]
+                R_desired = desired_delta_rotation.dot(self.selected_body_init_offset.rotation().matrix())
+
             # Could also pull the rotation back, but it's kind of nice to be able to recenter the object
             # without messing up a randomized rotation.
             #R_desired = (self.desired_pose_in_world_frame.rotation().matrix()*self.attract_factor +
@@ -198,7 +205,7 @@ class HydraInteractionLeafSystem(LeafSystem):
             aa = AngleAxis(R_err_in_body_frame)
             tau_p = R.dot(aa.axis()*aa.angle())
             tau_d = -Rd
-            tau = tau_p + 0.05*tau_d
+            tau = tau_p + 0.1*tau_d
 
             exerted_force = SpatialForce(tau=tau, f=f)
 
@@ -208,7 +215,7 @@ class HydraInteractionLeafSystem(LeafSystem):
             y_data.set_value(VectorExternallyAppliedSpatialForced([out]))
         else:
             y_data.set_value(VectorExternallyAppliedSpatialForced([]))
-
+        self.callback_lock.release()
 
     def DoPublish(self, context, event):
         # TODO(russt): Copied from meshcat_visualizer.py. 
@@ -216,9 +223,12 @@ class HydraInteractionLeafSystem(LeafSystem):
         # callback instead of overriding DoPublish, pending #9992.
         LeafSystem.DoPublish(self, context, event)
 
+        self.callback_lock.acquire()
+
         if self.stop:
             self.stop = False
             if context.get_time() > 0.5:
+                self.callback_lock.release()
                 raise StopIteration
 
         #query_object = self.EvalAbstractInput(context, 0).get_value()
@@ -247,7 +257,7 @@ class HydraInteractionLeafSystem(LeafSystem):
             self.selected_body = closest_body
             self.selected_body_init_offset = self.mbp.EvalBodyPoseInWorld(
                 self.mbp_context, self.selected_body)
-
+        self.callback_lock.release()
 
     def callback(self, msg):
         ''' Control mapping: 
@@ -256,6 +266,8 @@ class HydraInteractionLeafSystem(LeafSystem):
             Analog trigger: trigger
             Joy: +x is right, +y is fwd
         '''
+        self.callback_lock.acquire()
+
         self.lastMsg = msg
         self.hasNewMessage = True
 
@@ -310,6 +322,8 @@ class HydraInteractionLeafSystem(LeafSystem):
             translation[0] += pad_info.joy[1]*0.01
             print("Updated translation to ", translation)
             self.hydra_origin.set_translation(translation)
+
+        self.callback_lock.release()
 
 
 def do_main():
