@@ -302,39 +302,39 @@ class HydraInteractionLeafSystem(LeafSystem):
         if pad_info.buttons[5]:
             self.stop = True
 
-        if pad_info.buttons[1]:
-            # Scale down
-            self.hydra_prescale = max(0.01, self.hydra_prescale * 0.98)
-            print("Updated scaling to ", self.hydra_prescale)
-        if pad_info.buttons[3]:
-            # Scale up
-            self.hydra_prescale = min(10.0, self.hydra_prescale * 1.02)
-            print("Updated scaling to ", self.hydra_prescale)
-        if pad_info.buttons[2]:
-            # Translate down
-            translation = self.hydra_origin.translation().copy()
-            translation[2] -= 0.01
-            print("Updated translation to ", translation)
-            self.hydra_origin.set_translation(translation)
-        if pad_info.buttons[4]:
-            # Translate up
-            translation = self.hydra_origin.translation().copy()
-            translation[2] += 0.01
-            print("Updated translation to ", translation)
-            self.hydra_origin.set_translation(translation)
-
-        if abs(pad_info.joy[0]) > 0.01 or abs(pad_info.joy[1]) > 0.01:
-            # Translate up
-            translation = self.hydra_origin.translation().copy()
-            translation[1] -= pad_info.joy[0]*0.01
-            translation[0] += pad_info.joy[1]*0.01
-            print("Updated translation to ", translation)
-            self.hydra_origin.set_translation(translation)
-
+        # Optional: use buttons to adjust hydra-reality scaling.
+        # Disabling for easier onboarding of new users...
+        #if pad_info.buttons[1]:
+        #    # Scale down
+        #    self.hydra_prescale = max(0.01, self.hydra_prescale * 0.98)
+        #    print("Updated scaling to ", self.hydra_prescale)
+        #if pad_info.buttons[3]:
+        #    # Scale up
+        #    self.hydra_prescale = min(10.0, self.hydra_prescale * 1.02)
+        #    print("Updated scaling to ", self.hydra_prescale)
+        #if pad_info.buttons[2]:
+        #    # Translate down
+        #    translation = self.hydra_origin.translation().copy()
+        #    translation[2] -= 0.01
+        #    print("Updated translation to ", translation)
+        #    self.hydra_origin.set_translation(translation)
+        #if pad_info.buttons[4]:
+        #    # Translate up
+        #    translation = self.hydra_origin.translation().copy()
+        #    translation[2] += 0.01
+        #    print("Updated translation to ", translation)
+        #    self.hydra_origin.set_translation(translation)
+        #if abs(pad_info.joy[0]) > 0.01 or abs(pad_info.joy[1]) > 0.01:
+        #    # Translate up
+        #    translation = self.hydra_origin.translation().copy()
+        #    translation[1] -= pad_info.joy[0]*0.01
+        #    translation[0] += pad_info.joy[1]*0.01
+        #    print("Updated translation to ", translation)
+        self.hydra_origin.set_translation(translation)
         self.callback_lock.release()
 
 
-def save_config(all_object_instances, qf):
+def save_config(all_object_instances, qf, filename):
     output_dict = {"n_objects": len(all_object_instances)}
     for k in range(len(all_object_instances)):
         offset = k*7
@@ -345,7 +345,7 @@ def save_config(all_object_instances, qf):
             "params": [],
             "params_names": []
         }
-    with open("dish_bin_environments_human.yaml", "a") as file:
+    with open(filename, "a") as file:
         yaml.dump({"env_%d" % int(round(time.time() * 1000)):
                    output_dict},
                    file)
@@ -410,14 +410,14 @@ def do_main():
                     all_manipulable_body_ids += mbp.GetBodyIndices(model_id)
 
                     # Put them in a randomly ordered line, for placing
-                    #y_offset = (object_ordering[k] / float(total_num_objs) - 0.5)   #  RAnge -0.5 to 0.5
-                    #poses.append([
-                    #    RollPitchYaw(np.random.uniform(0., 2.*np.pi, size=3)).ToQuaternion().wxyz(),
-                    #    [-0.25, y_offset, 0.1]])
-                    #k += 1
+                    y_offset = (object_ordering[k] / float(total_num_objs) - 0.5)   #  RAnge -0.5 to 0.5
                     poses.append([
                         RollPitchYaw(np.random.uniform(0., 2.*np.pi, size=3)).ToQuaternion().wxyz(),
-                        [np.random.uniform(-0.2, 0.2), np.random.uniform(-0.1, 0.1), np.random.uniform(0.1, 0.3)]])
+                        [-0.25, y_offset, 0.1]])
+                    k += 1
+                    #$poses.append([
+                    #    RollPitchYaw(np.random.uniform(0., 2.*np.pi, size=3)).ToQuaternion().wxyz(),
+                    #    [np.random.uniform(-0.2, 0.2), np.random.uniform(-0.1, 0.1), np.random.uniform(0.1, 0.3)]])
 
             # Build a desk
             #parser.AddModelFromFile("cupboard_without_doors.sdf")
@@ -546,7 +546,7 @@ def do_main():
                     break
             if save:
                 print(colored("Saving", "green"))
-                save_config(all_object_instances, qf)
+                save_config(all_object_instances, qf, "dish_bin_environments_greg.yaml")
             else:
                 print(colored("Not saving due to bounds violation: " + str(q), "yellow"))
 
