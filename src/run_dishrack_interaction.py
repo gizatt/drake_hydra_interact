@@ -8,6 +8,7 @@ import random
 import time
 from threading import Lock
 from termcolor import colored
+import yaml
 
 # ROS
 import rospy
@@ -333,12 +334,28 @@ class HydraInteractionLeafSystem(LeafSystem):
         self.callback_lock.release()
 
 
+def save_config(all_object_instances, qf):
+    output_dict = {"n_objects": len(all_object_instances)}
+    for k in range(len(all_object_instances)):
+        offset = k*7
+        pose = qf[(offset):(offset+7)]
+        output_dict["obj_%04d" % k] = {
+            "class": all_object_instances[k][0],
+            "pose": pose.tolist(),
+            "params": [],
+            "params_names": []
+        }
+    with open("dish_bin_environments_human.yaml", "a") as file:
+        yaml.dump({"env_%d" % int(round(time.time() * 1000)):
+                   output_dict},
+                   file)
+
 def do_main():
     rospy.init_node('run_dishrack_interaction', anonymous=False)
     
     #np.random.seed(42)
     
-    while (1):
+    for outer_iter in range(200):
         try:
             builder = DiagramBuilder()
             mbp, scene_graph = AddMultibodyPlantSceneGraph(
@@ -364,7 +381,7 @@ def do_main():
             dish_bin_model = "/home/gizatt/projects/scene_generation/models/dish_models/bus_tub_01_decomp/bus_tub_01_decomp.urdf"
             candidate_model_files = {
                 #"mug": "/home/gizatt/drake/manipulation/models/mug/mug.urdf",
-                "mug": "/home/gizatt/projects/scene_generation/models/dish_models/mug_1_decomp/mug_1_decomp.urdf",
+                "mug_1": "/home/gizatt/projects/scene_generation/models/dish_models/mug_1_decomp/mug_1_decomp.urdf",
                 "plate_11in": "/home/gizatt/drake/manipulation/models/dish_models/plate_11in_decomp/plate_11in_decomp.urdf",
                 #"/home/gizatt/drake/manipulation/models/mug_big/mug_big.urdf",
                 #"/home/gizatt/drake/manipulation/models/dish_models/bowl_6p25in_decomp/bowl_6p25in_decomp.urdf",
@@ -512,9 +529,27 @@ def do_main():
         #            print "Final: ", q0_proj
             mbp.SetPositions(mbp_context, q0_proj)
 
-            simulator.StepTo(100000)
+            simulator.StepTo(1000)
+            raise StopIteration()
+
         except StopIteration:
-            print(colored("Stopped, restarting", 'yellow'))
+            print(colored("Stopped, saving and restarting", 'yellow'))
+            qf = mbp.GetPositions(mbp_context)
+
+            # Decide whether to accept: all objs within bounds
+            save = True
+            for k in range(len(all_object_instances)):
+                offset = k*7
+                q = qf[offset:(offset + 7)]
+                if q[4] <= -0.25 or q[4] >= 0.25 or q[5] <= -0.2 or q[5] >= 0.2 or q[6] <= -0.1:
+                    save = False
+                    break
+            if save:
+                print(colored("Saving", "green"))
+                save_config(all_object_instances, qf)
+            else:
+                print(colored("Not saving due to bounds violation: " + str(q), "yellow"))
+
         except Exception as e:
             print(colored("Suffered other exception " + str(e), "red"))
             sys.exit(-1)
