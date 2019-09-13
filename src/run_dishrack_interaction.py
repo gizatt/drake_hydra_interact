@@ -330,7 +330,7 @@ class HydraInteractionLeafSystem(LeafSystem):
         #    translation[1] -= pad_info.joy[0]*0.01
         #    translation[0] += pad_info.joy[1]*0.01
         #    print("Updated translation to ", translation)
-        self.hydra_origin.set_translation(translation)
+        #self.hydra_origin.set_translation(translation)
         self.callback_lock.release()
 
 
@@ -379,17 +379,18 @@ def do_main():
             parser = Parser(mbp, scene_graph)
 
             dish_bin_model = "/home/gizatt/projects/scene_generation/models/dish_models/bus_tub_01_decomp/bus_tub_01_decomp.urdf"
+            cupboard_model = "/home/gizatt/projects/scene_generation/models/dish_models/shelf_two_levels.sdf"
             candidate_model_files = {
                 #"mug": "/home/gizatt/drake/manipulation/models/mug/mug.urdf",
                 "mug_1": "/home/gizatt/projects/scene_generation/models/dish_models/mug_1_decomp/mug_1_decomp.urdf",
-                "plate_11in": "/home/gizatt/drake/manipulation/models/dish_models/plate_11in_decomp/plate_11in_decomp.urdf",
+                #"plate_11in": "/home/gizatt/drake/manipulation/models/dish_models/plate_11in_decomp/plate_11in_decomp.urdf",
                 #"/home/gizatt/drake/manipulation/models/mug_big/mug_big.urdf",
                 #"/home/gizatt/drake/manipulation/models/dish_models/bowl_6p25in_decomp/bowl_6p25in_decomp.urdf",
                 #"/home/gizatt/drake/manipulation/models/dish_models/plate_8p5in_decomp/plate_8p5in_decomp.urdf",
             }
 
             # Decide how many of each object to add
-            max_num_objs = 4
+            max_num_objs = 6
             num_objs = [np.random.randint(0, max_num_objs) for k in range(len(candidate_model_files.keys()))]
 
             # Actually produce their initial poses + add them to the sim
@@ -420,12 +421,12 @@ def do_main():
                     #    [np.random.uniform(-0.2, 0.2), np.random.uniform(-0.1, 0.1), np.random.uniform(0.1, 0.3)]])
 
             # Build a desk
-            #parser.AddModelFromFile("cupboard_without_doors.sdf")
-            #mbp.WeldFrames(world_body.body_frame(), mbp.GetBodyByName("cupboard_body").body_frame(),
-            #               RigidTransform(p=[0.25, 0, 0.3995 + 0.016/2])))
-            parser.AddModelFromFile(dish_bin_model)
-            mbp.WeldFrames(world_body.body_frame(), mbp.GetBodyByName("bus_tub_01_decomp_body_link").body_frame(),
-                           RigidTransform(p=[0.0, 0., 0.], rpy=RollPitchYaw(np.pi/2., 0., 0.)))
+            parser.AddModelFromFile(cupboard_model)
+            mbp.WeldFrames(world_body.body_frame(), mbp.GetBodyByName("shelf_origin_body").body_frame(),
+                           RigidTransform(p=[0.0, 0, 0.0]))
+            #parser.AddModelFromFile(dish_bin_model)
+            #mbp.WeldFrames(world_body.body_frame(), mbp.GetBodyByName("bus_tub_01_decomp_body_link").body_frame(),
+            #               RigidTransform(p=[0.0, 0., 0.], rpy=RollPitchYaw(np.pi/2., 0., 0.)))
 
             mbp.AddForceElement(UniformGravityFieldElement())
             mbp.Finalize()
@@ -546,7 +547,7 @@ def do_main():
                     break
             if save:
                 print(colored("Saving", "green"))
-                save_config(all_object_instances, qf, "dish_bin_environments_greg.yaml")
+                save_config(all_object_instances, qf, "mug_rack_environments_human.yaml")
             else:
                 print(colored("Not saving due to bounds violation: " + str(q), "yellow"))
 
