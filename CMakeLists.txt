@@ -16,7 +16,7 @@ include_directories(include ${catkin_INCLUDE_DIRS})
 
 catkin_python_setup()
 catkin_install_python(PROGRAMS
-    src/run_dishrack_interaction.py
+    src/drake_hydra_interact/run_interaction.py
     DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
 install(DIRECTORY include/${PROJECT_NAME}/
