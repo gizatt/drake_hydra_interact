@@ -6,7 +6,6 @@ world_description:
       pose:
         xyz: [0.5, 0., 0.]
         rpy: [0., 0., 0.]
-
 placeable_objects:
   - model_file: "ycb/sdf/003_cracker_box.sdf"
     occurance:

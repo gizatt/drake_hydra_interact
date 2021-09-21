@@ -48,14 +48,6 @@ from pydrake.all import (
 
 from drake_hydra_interact.hydra_system import HydraInteractionLeafSystem
 
-
-def ros_tf_to_rigid_transform(msg):
-    return RigidTransform(
-        p=[msg.translation.x, msg.translation.y, msg.translation.z],
-        R=RotationMatrix(Quaternion(msg.rotation.w, msg.rotation.x,
-                                    msg.rotation.y, msg.rotation.z)))
-
-
 def save_config(all_object_instances, qf, filename):
     output_dict = {"n_objects": len(all_object_instances)}
     for k in range(len(all_object_instances)):
@@ -150,7 +142,7 @@ def collect_placement(args):
             builder, MultibodyPlant(time_step=args.timestep))
 
         # Add ground if requested
-        if yaml_info["world_description"]["has_ground"]:
+        if yaml_info["world_description"]["has_ground"] is True:
             add_ground(mbp)
 
         # Get ready to parse lots of model files.
@@ -215,7 +207,7 @@ def collect_placement(args):
 
         if not args.no_hydra:
             hydra_sg_spy = builder.AddSystem(HydraInteractionLeafSystem(mbp, scene_graph, all_manipulable_body_ids=all_manipulable_body_ids))
-            builder.Connect(scene_graph.get_pose_bundle_output_port(),
+            builder.Connect(scene_graph.get_query_output_port(),
                             hydra_sg_spy.get_input_port(0))
             builder.Connect(mbp.get_state_output_port(),
                             hydra_sg_spy.get_input_port(1))
@@ -245,6 +237,7 @@ def collect_placement(args):
         raise NotImplementedError()
 
     except Exception as e:
+        print(e)
         logging.error("Suffered other exception " + str(e))
         sys.exit(-1)
     except:

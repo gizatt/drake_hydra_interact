@@ -1,6 +1,7 @@
 #! /usr/bin/env python3
 
 import numpy as np
+import os
 from threading import Lock
 import logging
 
@@ -21,15 +22,25 @@ from pydrake.all import (
     AbstractValue,
     AngleAxis,
     BasicVector,
+    BodyIndex,
     ExternallyAppliedSpatialForce,
     LeafSystem,
-    PoseBundle,
+    List,
+    Quaternion,
     QueryObject,
     RollPitchYaw,
     RotationMatrix,
     RigidTransform,
-    SpatialForce
+    SpatialForce,
+    Value
 )
+
+
+def ros_tf_to_rigid_transform(msg):
+    return RigidTransform(
+        p=[msg.translation.x, msg.translation.y, msg.translation.z],
+        R=RotationMatrix(Quaternion(msg.rotation.w, msg.rotation.x,
+                                    msg.rotation.y, msg.rotation.z)))
 
 
 class HydraInteractionLeafSystem(LeafSystem):
@@ -47,20 +58,14 @@ class HydraInteractionLeafSystem(LeafSystem):
         self.all_manipulable_body_ids = all_manipulable_body_ids
         self.set_name('HydraInteractionLeafSystem')
 
-        # Pose bundle (from SceneGraph) input port.
-        #default_sg_context = sg.CreateDefaultContext()
-        #print("Default sg context: ", default_sg_context)
-        #query_object = sg.get_query_output_port().Eval(default_sg_context)
-        #print("Query object: ", query_object)
-        #self.DeclareAbstractInputPort("query_object",
-        #                              AbstractValue.Make(query_object))
-        self.pose_bundle_input_port = self.DeclareAbstractInputPort(
-            "pose_bundle", AbstractValue.Make(PoseBundle(0)))
+        self._geometry_query_input_port = self.DeclareAbstractInputPort(
+            "geometry_query", AbstractValue.Make(QueryObject()))
         self.robot_state_input_port = self.DeclareVectorInputPort(
             "robot_state", BasicVector(mbp.num_positions() + mbp.num_velocities()))
+        forces_cls = Value[List[ExternallyAppliedSpatialForce]]
         self.spatial_forces_output_port = self.DeclareAbstractOutputPort(
             "spatial_forces_vector",
-            AbstractValue.Make([ExternallyAppliedSpatialForce()]),
+            lambda: forces_cls(),
             self.DoCalcAbstractOutput)
         self.DeclarePeriodicPublish(0.01, 0.0)
 
@@ -73,7 +78,7 @@ class HydraInteractionLeafSystem(LeafSystem):
         fwd_pt_in_hydra_frame = RigidTransform(p=[0.0, 0.0, 0.0])
         self.vis["hydra_origin"]["hand"].set_object(
             meshcat_geom.ObjMeshGeometry.from_file(
-                os.path.join(os.getcwd(), "hand-regularfinal-scaled-1.obj"))
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), "hand-regularfinal-scaled-1.obj"))
         )
 
         self.vis["hydra_origin"]["hand"].set_transform(meshcat_tf.compose_matrix(scale=[0.001, 0.001, 0.001], angles=[np.pi/2, 0., np.pi/2], translate=[-0.25, 0., 0.]))
@@ -152,10 +157,10 @@ class HydraInteractionLeafSystem(LeafSystem):
             else:
                 # Figure out the relative rotation of the hydra from its initial posture
                 to_init_hydra_tf = self.grab_update_hydra_pose.inverse()
-                desired_delta_rotation = to_init_hydra_tf.multiply(self.desired_pose_in_world_frame).matrix()[:3, :3]
+                desired_delta_rotation = to_init_hydra_tf.multiply(self.desired_pose_in_world_frame).GetAsMatrix4()[:3, :3]
                 # Transform the current object rotation into the init hydra frame, apply that relative tf, and
                 # then transform back
-                to_init_hydra_tf_rot = to_init_hydra_tf.matrix()[:3, :3]
+                to_init_hydra_tf_rot = to_init_hydra_tf.GetAsMatrix4()[:3, :3]
                 R_desired = to_init_hydra_tf_rot.T.dot(
                     desired_delta_rotation.dot(to_init_hydra_tf_rot.dot(
                         self.selected_body_init_offset.rotation().matrix())))
@@ -201,7 +206,7 @@ class HydraInteractionLeafSystem(LeafSystem):
                 raise StopIteration
 
         #query_object = self.EvalAbstractInput(context, 0).get_value()
-        pose_bundle = self.EvalAbstractInput(context, 0).get_value()
+        #pose_bundle = self.EvalAbstractInput(context, 0).get_value()
         x_in = self.EvalVectorInput(context, 1).get_value()
         self.mbp.SetPositionsAndVelocities(self.mbp_context, x_in)
         
@@ -212,7 +217,7 @@ class HydraInteractionLeafSystem(LeafSystem):
             #print [x.distance for x in query_object.ComputeSignedDistanceToPoint(hydra_tf.matrix()[:3, 3])]
             # Find closest body to current pose
 
-            grab_center = hydra_tf.matrix()[:3, 3]
+            grab_center = hydra_tf.GetAsMatrix4()[:3, 3]
             closest_distance = np.inf
             closest_body = self.mbp.get_body(BodyIndex(2))
             for body_id in self.all_manipulable_body_ids:
@@ -245,7 +250,7 @@ class HydraInteractionLeafSystem(LeafSystem):
         hydra_tf_uncalib.set_translation(hydra_tf_uncalib.translation()*self.hydra_prescale)
         hydra_tf = self.hydra_origin.multiply(hydra_tf_uncalib)
         self.desired_pose_in_world_frame = hydra_tf
-        self.vis["hydra_origin"].set_transform(hydra_tf.matrix())
+        self.vis["hydra_origin"].set_transform(hydra_tf.GetAsMatrix4())
 
 
         # Interpret various buttons for changing to scaling
