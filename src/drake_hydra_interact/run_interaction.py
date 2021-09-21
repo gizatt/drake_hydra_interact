@@ -1,36 +1,34 @@
 #! /usr/bin/env python3
 
+import argparse
 import sys
 import os
 import numpy as np
 import random
 import time
-from threading import Lock
-from termcolor import colored
+import logging
+
 import yaml
+try:
+    from yaml import CLoader as Loader, CDumper as Dumper
+except ImportError:
+    from yaml import Loader, Dumper
 
 # ROS
 import rospy
-import sensor_msgs.msg
-import geometry_msgs.msg
-import tf2_ros
-import tf
-import razer_hydra.msg
 
 import meshcat
-import meshcat.geometry as meshcat_geom
-import meshcat.transformations as meshcat_tf
 
 import pydrake
 from pydrake.all import (
     AbstractValue,
     AddMultibodyPlantSceneGraph,
     Box,
+    ConnectMeshcatVisualizer,
     CoulombFriction,
     DiagramBuilder,
     FindResourceOrThrow,
     Quaternion,
-    MeshcatVisualizer,
     MultibodyPlant,
     Parser,
     RigidTransform,
@@ -40,7 +38,6 @@ from pydrake.all import (
     Simulator,
     SpatialInertia,
     Sphere,
-    UniformGravityFieldElement,
     UnitInertia
 )
 
@@ -50,12 +47,6 @@ from pydrake.all import (
 )
 
 from drake_hydra_interact.hydra_system import HydraInteractionLeafSystem
-
-help_string = '''
-    The current wand pose will appear in the meshcat visualizer as a ball.
-    The digital trigger grabs objects, softly welding (position + orientation)
-    to the gripper for the duration of the trigger press.
-'''
 
 
 def ros_tf_to_rigid_transform(msg):
@@ -81,91 +72,149 @@ def save_config(all_object_instances, qf, filename):
                    output_dict},
                    file)
 
-def setup_environment():
-    pass
 
-def do_main():
-    rospy.init_node('run_interaction', anonymous=False)
+def setup_args():
+    parser = argparse.ArgumentParser(description='Do interactive placement of objects.')
+    parser.add_argument('environment_folder',
+                        help='Path to folder containing environment_description.yaml')
+    parser.add_argument('--no_hydra', action='store_true',
+                        help='Disable hydra input, which also disables ROS requirement.')
+    parser.add_argument('--timestep', default="0.001", type=float,
+                        help='Drake MBP simulation timestep.')
+    parser.add_argument('--zmq_url', default=None,
+                        help='ZMQ url of meshcat server to connect to. See drake/MeshcatVisualizer')
+    args = parser.parse_args()
+    return args
+
+def load_env_description(args):
+    # Returns yaml dictionary from the environment_description.yaml specified
+    # by the args.
+    env_yaml_path = os.path.join(args.environment_folder, "environment_description.yaml")
+    assert os.path.exists(env_yaml_path), "Env description not found at %s" % env_yaml_path
+    with open(env_yaml_path, "r") as f:
+        return yaml.load(f, Loader=Loader)
+
+def add_ground(mbp):
+    world_body = mbp.world_body()
+    ground_shape = Box(10., 10., 2.)
+    ground_body = mbp.AddRigidBody("ground", SpatialInertia(
+        mass=100.0, p_PScm_E=np.array([0., 0., 0.]),
+        G_SP_E=UnitInertia(1.0, 1.0, 1.0)))
+    mbp.WeldFrames(world_body.body_frame(), ground_body.body_frame(),
+                   RigidTransform(p=[0, 0, -1]))
+    mbp.RegisterVisualGeometry(
+        ground_body, RigidTransform.Identity(), ground_shape, "ground_vis",
+        np.array([0.5, 0.5, 0.5, 1.]))
+    mbp.RegisterCollisionGeometry(
+        ground_body, RigidTransform.Identity(), ground_shape, "ground_col",
+        CoulombFriction(0.9, 0.8))
+
+def add_model(mbp, parser, name, model_path, tf, fixed, root_body_name=None):
+    # Adds model from model_path to the mbp. Returns a list of
+    # body ids added to the model. root_body_name (or an automatically-determined
+    # root body) will be welded to the world if requested.
+    model_id = parser.AddModelFromFile(model_path, model_name=name)
+
+    # Figure out root body if we aren't given one.
+    body_inds = mbp.GetBodyIndices(model_id)
+    if root_body_name is None:
+        assert len(body_inds) == 1, \
+            "Please supply root_body_name for model with path %s" % model_path
+        root_body = mbp.get_body(body_inds[0])
+    else:
+        root_body = mbp.GetBodyByName(
+            name=root_body_name,
+            model_instance=model_id)
+
+    if fixed:
+        mbp.WeldFrames(
+            mbp.world_body().body_frame(),
+            root_body.body_frame(),
+            tf
+        )
+    else:
+        mbp.SetDefaultFreeBodyPose(root_body, tf)
+
+    return body_inds
+
+def collect_placement(args):
+    ''' Sets up a new MBP based on the environment folder specified in the args.
+    Connects a Razer hydra (unless suppresed), and runs an interactive placement sim. '''
+    try:
+        # Load in YAML
+        yaml_info = load_env_description(args)
     
-    for outer_iter in range(200):
-        try:
-            builder = DiagramBuilder()
-            mbp, scene_graph = AddMultibodyPlantSceneGraph(
-                builder, MultibodyPlant(time_step=0.0025))
+        # Build MBP
+        builder = DiagramBuilder()
+        mbp, scene_graph = AddMultibodyPlantSceneGraph(
+            builder, MultibodyPlant(time_step=args.timestep))
 
-            # Add ground
-            world_body = mbp.world_body()
-            ground_shape = Box(2., 2., 2.)
-            ground_body = mbp.AddRigidBody("ground", SpatialInertia(
-                mass=10.0, p_PScm_E=np.array([0., 0., 0.]),
-                G_SP_E=UnitInertia(1.0, 1.0, 1.0)))
-            mbp.WeldFrames(world_body.body_frame(), ground_body.body_frame(),
-                           RigidTransform(p=[0, 0, -1]))
-            mbp.RegisterVisualGeometry(
-                ground_body, RigidTransform.Identity(), ground_shape, "ground_vis",
-                np.array([0.5, 0.5, 0.5, 1.]))
-            mbp.RegisterCollisionGeometry(
-                ground_body, RigidTransform.Identity(), ground_shape, "ground_col",
-                CoulombFriction(0.9, 0.8))
+        # Add ground if requested
+        if yaml_info["world_description"]["has_ground"]:
+            add_ground(mbp)
 
-            parser = Parser(mbp, scene_graph)
+        # Get ready to parse lots of model files.
+        parser = Parser(mbp, scene_graph)
 
-            dish_bin_model = "/home/gizatt/projects/scene_generation/models/dish_models/bus_tub_01_decomp/bus_tub_01_decomp.urdf"
-            cupboard_model = "/home/gizatt/projects/scene_generation/models/dish_models/shelf_two_levels.sdf"
-            candidate_model_files = {
-                #"mug": "/home/gizatt/drake/manipulation/models/mug/mug.urdf",
-                "mug_1": "/home/gizatt/projects/scene_generation/models/dish_models/mug_1_decomp/mug_1_decomp.urdf",
-                #"plate_11in": "/home/gizatt/drake/manipulation/models/dish_models/plate_11in_decomp/plate_11in_decomp.urdf",
-                #"/home/gizatt/drake/manipulation/models/mug_big/mug_big.urdf",
-                #"/home/gizatt/drake/manipulation/models/dish_models/bowl_6p25in_decomp/bowl_6p25in_decomp.urdf",
-                #"/home/gizatt/drake/manipulation/models/dish_models/plate_8p5in_decomp/plate_8p5in_decomp.urdf",
-            }
+        # First load in the world models.
+        for k, model_info in enumerate(yaml_info["world_description"]["models"]):
+            tf = RigidTransform(
+                p=model_info["pose"]["xyz"],
+                rpy=RollPitchYaw(model_info["pose"]["rpy"])
+            )
+            root_body_name = None
+            if "root_body_name" in model_info.keys():
+                root_body_name = model_info["root_body_name"]
+            model_file = os.path.join(args.environment_folder, model_info["model_file"])
+            add_model(
+                mbp, parser, "world_model_%d" % k, model_file,
+                tf=tf, fixed=True, root_body_name=root_body_name
+            )
 
-            # Decide how many of each object to add
-            max_num_objs = 6
-            num_objs = [np.random.randint(0, max_num_objs) for k in range(len(candidate_model_files.keys()))]
+        # Go through and decide how many objects will be spawned,
+        # collecting the model paths into a list.
+        model_paths = []
+        for model_info in yaml_info["placeable_objects"]:
+            # Decide how many objects to place
+            occurance_info = model_info["occurance"]
+            # np.random.geometric is supported on [1, inf], so subtract
+            # one so we sometimes can get zero objects.
+            n_objects = np.clip(
+                np.random.geometric(p=occurance_info["rate"])-1,
+                occurance_info["min"], occurance_info["max"]
+            )
+            logging.info("Sampled %d x %s", n_objects, model_info['model_file'])
+            for k in range(n_objects):
+                model_paths.append(model_info["model_file"])
 
-            # Actually produce their initial poses + add them to the sim
-            poses = []  # [quat, pos]
-            all_object_instances = []
-            all_manipulable_body_ids = []
-            total_num_objs = sum(num_objs)
-            object_ordering = list(range(total_num_objs))
-            k = 0
-            random.shuffle(object_ordering)
-            print("ordering: ", object_ordering)
-            for class_k, class_entry in enumerate(candidate_model_files.items()):
-                for model_instance_k in range(num_objs[class_k]):
-                    class_name, class_path = class_entry
-                    model_name = "%s_%d" % (class_name, model_instance_k)
-                    all_object_instances.append([class_name, model_name])
-                    model_id = parser.AddModelFromFile(class_path, model_name=model_name)
-                    all_manipulable_body_ids += mbp.GetBodyIndices(model_id)
+        # Shuffle the objects and add them to the sim in
+        # a -y/+y line.
+        random.shuffle(model_paths)
+        all_manipulable_body_ids = []
 
-                    # Put them in a randomly ordered line, for placing
-                    y_offset = (object_ordering[k] / float(total_num_objs) - 0.5)   #  RAnge -0.5 to 0.5
-                    poses.append([
-                        RollPitchYaw(np.random.uniform(0., 2.*np.pi, size=3)).ToQuaternion().wxyz(),
-                        [-0.25, y_offset, 0.1]])
-                    k += 1
-                    #$poses.append([
-                    #    RollPitchYaw(np.random.uniform(0., 2.*np.pi, size=3)).ToQuaternion().wxyz(),
-                    #    [np.random.uniform(-0.2, 0.2), np.random.uniform(-0.1, 0.1), np.random.uniform(0.1, 0.3)]])
+        for k, model_path in enumerate(model_paths):
+            N = len(model_paths)
+            y_offset = ((k + 1) // 2) * 0.2  # [ 0, .2, .2, .4, .4, ...]
+            y_offset *= (k % 2)*2. - 1. # [0, .2, -.2, .4, -.4, ...]
+            tf = RigidTransform(
+                p=np.array([0., y_offset, 0.2]),
+                # Not true uniform random rotations, but it's not important here
+                rpy=RollPitchYaw(np.random.uniform(0., 2*np.pi, size=3))
+            )
+            model_file = os.path.join(args.environment_folder, model_path)
+            root_body_name = None
+            if "root_body_name" in model_info.keys():
+                root_body_name = model_info["root_body_name"]
+            new_body_inds = add_model(
+                mbp, parser, "manip_model_%d" % k, model_file,
+                tf=tf, fixed=False, root_body_name=root_body_name
+            )
+            all_manipulable_body_ids += new_body_inds
 
-            # Build a desk
-            parser.AddModelFromFile(cupboard_model)
-            mbp.WeldFrames(world_body.body_frame(), mbp.GetBodyByName("shelf_origin_body").body_frame(),
-                           RigidTransform(p=[0.0, 0, 0.0]))
-            #parser.AddModelFromFile(dish_bin_model)
-            #mbp.WeldFrames(world_body.body_frame(), mbp.GetBodyByName("bus_tub_01_decomp_body_link").body_frame(),
-            #               RigidTransform(p=[0.0, 0., 0.], rpy=RollPitchYaw(np.pi/2., 0., 0.)))
+        mbp.Finalize()
 
-            mbp.AddForceElement(UniformGravityFieldElement())
-            mbp.Finalize()
-
+        if not args.no_hydra:
             hydra_sg_spy = builder.AddSystem(HydraInteractionLeafSystem(mbp, scene_graph, all_manipulable_body_ids=all_manipulable_body_ids))
-            #builder.Connect(scene_graph.get_query_output_port(),
-            #                hydra_sg_spy.get_input_port(0))
             builder.Connect(scene_graph.get_pose_bundle_output_port(),
                             hydra_sg_spy.get_input_port(0))
             builder.Connect(mbp.get_state_output_port(),
@@ -173,113 +222,43 @@ def do_main():
             builder.Connect(hydra_sg_spy.get_output_port(0),
                             mbp.get_applied_spatial_force_input_port())
 
-            visualizer = builder.AddSystem(MeshcatVisualizer(
-                scene_graph,
-                zmq_url="tcp://127.0.0.1:6000",
-                draw_period=0.01))
-            builder.Connect(scene_graph.get_pose_bundle_output_port(),
-                            visualizer.get_input_port(0))
+        visualizer = ConnectMeshcatVisualizer(
+            builder, scene_graph,
+            zmq_url=args.zmq_url,
+            draw_period=0.0333
+        )
 
-            diagram = builder.Build()
+        diagram = builder.Build()
 
-            diagram_context = diagram.CreateDefaultContext()
-            mbp_context = diagram.GetMutableSubsystemContext(
-                mbp, diagram_context)
-            sg_context = diagram.GetMutableSubsystemContext(
-                scene_graph, diagram_context)
+        diagram_context = diagram.CreateDefaultContext()
+        simulator = Simulator(diagram, diagram_context)
+        simulator.set_target_realtime_rate(1.0)
+        simulator.set_publish_every_time_step(False)
+        simulator.Initialize()
+        simulator.AdvanceTo(1000.)
+        raise StopIteration()
 
-            q0 = mbp.GetPositions(mbp_context).copy()
-            for k in range(len(poses)):
-                offset = k*7
-                q0[(offset):(offset+4)] = poses[k][0]
-                q0[(offset+4):(offset+7)] = poses[k][1]
-            mbp.SetPositions(mbp_context, q0)
-            simulator = Simulator(diagram, diagram_context)
-            simulator.set_target_realtime_rate(1.0)
-            simulator.set_publish_every_time_step(False)
-            simulator.Initialize()
+    except StopIteration:
+        logging.info("Stopped, saving and restarting")
+        qf = mbp.GetPositions(mbp_context)
 
-            ik = InverseKinematics(mbp, mbp_context)
-            q_dec = ik.q()
-            prog = ik.prog()
+        raise NotImplementedError()
 
-            def squaredNorm(x):
-                return np.array([x[0] ** 2 + x[1] ** 2 + x[2] ** 2 + x[3] ** 2])
-            for k in range(len(poses)):
-                # Quaternion norm
-                prog.AddConstraint(
-                    squaredNorm, [1], [1], q_dec[(k*7):(k*7+4)])
-                # Trivial quaternion bounds
-                prog.AddBoundingBoxConstraint(
-                    -np.ones(4), np.ones(4), q_dec[(k*7):(k*7+4)])
-                # Conservative bounds on on XYZ
-                prog.AddBoundingBoxConstraint(
-                    np.array([-2., -2., -2.]), np.array([2., 2., 2.]),
-                    q_dec[(k*7+4):(k*7+7)])
+    except Exception as e:
+        logging.error("Suffered other exception " + str(e))
+        sys.exit(-1)
+    except:
+        logging.error("Suffered totally unknown exception! Probably sim.")
 
-            def vis_callback(x):
-                vis_diagram_context = diagram.CreateDefaultContext()
-                mbp.SetPositions(diagram.GetMutableSubsystemContext(mbp, vis_diagram_context), x)
-                pose_bundle = scene_graph.get_pose_bundle_output_port().Eval(diagram.GetMutableSubsystemContext(scene_graph, vis_diagram_context))
-                context = visualizer.CreateDefaultContext()
-                context.FixInputPort(0, AbstractValue.Make(pose_bundle))
-                visualizer.Publish(context)
+def do_main_loop(args):
+    if not args.no_hydra:
+        rospy.init_node('run_interaction', anonymous=False)
+    logging.basicConfig(level=logging.INFO)
+    for k in range(10):
+        collect_placement(args)
 
-            prog.AddVisualizationCallback(vis_callback, q_dec)
-            prog.AddQuadraticErrorCost(np.eye(q0.shape[0])*1.0, q0, q_dec)
-
-            ik.AddMinimumDistanceConstraint(0.001, threshold_distance=1.0)
-
-            prog.SetInitialGuess(q_dec, q0)
-            print("Solving")
-        #            print "Initial guess: ", q0
-            start_time = time.time()
-            solver = SnoptSolver()
-            sid = solver.solver_type()
-            # SNOPT
-            prog.SetSolverOption(sid, "Print file", "test.snopt")
-            prog.SetSolverOption(sid, "Major feasibility tolerance", 1e-3)
-            prog.SetSolverOption(sid, "Major optimality tolerance", 1e-2)
-            prog.SetSolverOption(sid, "Minor feasibility tolerance", 1e-3)
-            prog.SetSolverOption(sid, "Scale option", 0)
-            #prog.SetSolverOption(sid, "Elastic weight", 1e1)
-            #prog.SetSolverOption(sid, "Elastic mode", "Yes")
-
-            print("Solver opts: ", prog.GetSolverOptions(solver.solver_type()))
-            result = solver.Solve(prog)
-            print("Solve info: ", result)
-            print("Solved in %f seconds" % (time.time() - start_time))
-            print(result.get_solver_id().name())
-            q0_proj = result.GetSolution(q_dec)
-        #            print "Final: ", q0_proj
-            mbp.SetPositions(mbp_context, q0_proj)
-
-            simulator.StepTo(1000)
-            raise StopIteration()
-
-        except StopIteration:
-            print(colored("Stopped, saving and restarting", 'yellow'))
-            qf = mbp.GetPositions(mbp_context)
-
-            # Decide whether to accept: all objs within bounds
-            save = True
-            for k in range(len(all_object_instances)):
-                offset = k*7
-                q = qf[offset:(offset + 7)]
-                if q[4] <= -0.25 or q[4] >= 0.25 or q[5] <= -0.2 or q[5] >= 0.2 or q[6] <= -0.1:
-                    save = False
-                    break
-            if save:
-                print(colored("Saving", "green"))
-                save_config(all_object_instances, qf, "mug_rack_environments_human.yaml")
-            else:
-                print(colored("Not saving due to bounds violation: " + str(q), "yellow"))
-
-        except Exception as e:
-            print(colored("Suffered other exception " + str(e), "red"))
-            sys.exit(-1)
-        except:
-            print(colored("Suffered totally unknown exception! Probably sim.", "red"))
+        
 
 if __name__ == "__main__":
-    do_main()
+    args = setup_args()
+    do_main_loop(args)
