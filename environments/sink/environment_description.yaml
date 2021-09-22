@@ -6,20 +6,38 @@ world_description:
       pose:
         xyz: [0.5, 0., 0.]
         rpy: [0., 0., 0.]
+occurance:
+  #                0   1   2   3   4   5   6   7
+  obj_count_dist: [0., 0.5, 0.25, 1., 1., 1.]
+
 placeable_objects:
-  - model_file: "ycb/sdf/003_cracker_box.sdf"
-    occurance:
-      min: 0
-      max: 3
-      rate: 0.25
-  - model_file: "ycb/sdf/004_sugar_box.sdf"
-    occurance:
-      min: 0
-      max: 3
-      rate: 0.25
-  - model_file: "ycb/sdf/005_tomato_soup_can.sdf"
-    occurance:
-      min: 0
-      max: 3
-      rate: 0.25
-  
+  - model_file: "plates_cups_and_bowls/cups/Cole_Hardware_Mug_Classic_Blue/model_simplified.sdf"
+    metadata:
+      class: "cup"
+  - model_file: "plates_cups_and_bowls/cups/Room_Essentials_Mug_White_Yellow/model_simplified.sdf"
+    metadata:
+      class: "cup"
+  - model_file: "plates_cups_and_bowls/cups/Threshold_Porcelain_Coffee_Mug_All_Over_Bead_White/model_simplified.sdf"
+    metadata:
+      class: "cup"
+  - model_file: "plates_cups_and_bowls/plates/Threshold_Bistro_Ceramic_Dinner_Plate_Ruby_Ring/model_simplified.sdf"
+    metadata:
+      class: "plate"
+  - model_file: "plates_cups_and_bowls/plates/Ecoforms_Plate_S20Avocado/model_simplified.sdf"
+    metadata:
+      class: "plate"
+  - model_file: "plates_cups_and_bowls/plates/Room_Essentials_Salad_Plate_Turquoise/model_simplified.sdf"
+    metadata:
+      class: "plate"
+  - model_file: "plates_cups_and_bowls/plates/Ecoforms_Plant_Plate_S11Turquoise/model_simplified.sdf"
+    metadata:
+      class: "plate"
+  - model_file: "plates_cups_and_bowls/bowls/Bradshaw_International_11642_7_Qt_MP_Plastic_Bowl/model_simplified.sdf"
+    metadata:
+      class: "bowl"
+  - model_file: "plates_cups_and_bowls/bowls/Cole_Hardware_Bowl_Scirocco_YellowBlue/model_simplified.sdf"
+    metadata:
+      class: "bowl"
+  - model_file: "plates_cups_and_bowls/bowls/Room_Essentials_Bowl_Turquiose/model_simplified.sdf"
+    metadata:
+      class: "bowl"

@@ -1,6 +1,7 @@
 #! /usr/bin/env python3
 
 import argparse
+from copy import deepcopy
 import sys
 import os
 import numpy as np
@@ -48,22 +49,18 @@ from pydrake.all import (
 
 from drake_hydra_interact.hydra_system import HydraInteractionLeafSystem
 
-def save_config(all_object_instances, qf, filename):
-    output_dict = {"n_objects": len(all_object_instances)}
-    for k in range(len(all_object_instances)):
-        offset = k*7
-        pose = qf[(offset):(offset+7)]
-        output_dict["obj_%04d" % k] = {
-            "class": all_object_instances[k][0],
-            "pose": pose.tolist(),
-            "params": [],
-            "params_names": []
-        }
+def save_config(objects, world_description, filename):
+    # Given an object dict (with pose annotated with xyz and rpy entries),
+    # saves out a scene yaml dict.
+    env_dict = {
+        "env_%d" % int(round(time.time() * 1000)):
+            {
+                "world_description": world_description,
+                "objects": objects
+            }
+    }
     with open(filename, "a") as file:
-        yaml.dump({"env_%d" % int(round(time.time() * 1000)):
-                   output_dict},
-                   file)
-
+        yaml.dump(env_dict, file)
 
 def setup_args():
     parser = argparse.ArgumentParser(description='Do interactive placement of objects.')
@@ -163,37 +160,31 @@ def collect_placement(args):
                 tf=tf, fixed=True, root_body_name=root_body_name
             )
 
-        # Go through and decide how many objects will be spawned,
-        # collecting the model paths into a list.
-        model_paths = []
-        for model_info in yaml_info["placeable_objects"]:
-            # Decide how many objects to place
-            occurance_info = model_info["occurance"]
-            # np.random.geometric is supported on [1, inf], so subtract
-            # one so we sometimes can get zero objects.
-            n_objects = np.clip(
-                np.random.geometric(p=occurance_info["rate"])-1,
-                occurance_info["min"], occurance_info["max"]
-            )
-            logging.info("Sampled %d x %s", n_objects, model_info['model_file'])
-            for k in range(n_objects):
-                model_paths.append(model_info["model_file"])
+        # Decide how many objects to spawn.
+        count_weights = np.array(yaml_info["occurance"]["obj_count_dist"])
+        count_weights /= count_weights.sum()
+        n_objects = np.random.choice(range(len(count_weights)), p=count_weights)
+        rospy.loginfo("Sampling %d objects" % n_objects)
 
-        # Shuffle the objects and add them to the sim in
-        # a -y/+y line.
-        random.shuffle(model_paths)
+        # Pick a random object n_object times.
+        objects = []
+        n_available_objects = len(yaml_info["placeable_objects"])
+        for k in range(n_objects):
+            obj_k = np.random.randint(n_available_objects)
+            objects.append(deepcopy(yaml_info["placeable_objects"][obj_k]))
+
+        # Add objects to the sim in a -y/+y line.
         all_manipulable_body_ids = []
 
-        for k, model_path in enumerate(model_paths):
-            N = len(model_paths)
-            y_offset = ((k + 1) // 2) * 0.2  # [ 0, .2, .2, .4, .4, ...]
+        for k, model_info in enumerate(objects):
+            y_offset = ((k + 1) // 2) * 0.25  # [ 0, .2, .2, .4, .4, ...]
             y_offset *= (k % 2)*2. - 1. # [0, .2, -.2, .4, -.4, ...]
             tf = RigidTransform(
                 p=np.array([0., y_offset, 0.2]),
                 # Not true uniform random rotations, but it's not important here
                 rpy=RollPitchYaw(np.random.uniform(0., 2*np.pi, size=3))
             )
-            model_file = os.path.join(args.environment_folder, model_path)
+            model_file = os.path.join(args.environment_folder, model_info["model_file"])
             root_body_name = None
             if "root_body_name" in model_info.keys():
                 root_body_name = model_info["root_body_name"]
@@ -202,6 +193,8 @@ def collect_placement(args):
                 tf=tf, fixed=False, root_body_name=root_body_name
             )
             all_manipulable_body_ids += new_body_inds
+            assert len(new_body_inds) == 1, new_body_inds
+            model_info["body_id"] = new_body_inds[0]
 
         mbp.Finalize()
 
@@ -223,6 +216,7 @@ def collect_placement(args):
         diagram = builder.Build()
 
         diagram_context = diagram.CreateDefaultContext()
+        mbp_context = diagram.GetSubsystemContext(mbp, diagram_context)
         simulator = Simulator(diagram, diagram_context)
         simulator.set_target_realtime_rate(1.0)
         simulator.set_publish_every_time_step(False)
@@ -231,26 +225,34 @@ def collect_placement(args):
         raise StopIteration()
 
     except StopIteration:
-        logging.info("Stopped, saving and restarting")
-        qf = mbp.GetPositions(mbp_context)
+        rospy.loginfo("Stopped, saving and restarting")
 
-        raise NotImplementedError()
+        # Build pose entries for the objects
+        for model_info in objects:
+            # Remove body index once we're used it, since we don't
+            # need it and can't save it.
+            tf = mbp.GetFreeBodyPose(
+                mbp_context, mbp.get_body(model_info.pop("body_id"))
+            )
+            model_info["pose"] = {
+                "xyz": tf.translation().tolist(),
+                "rpy": RollPitchYaw(tf.rotation()).vector().tolist()
+            }
+        save_config(
+            objects, yaml_info["world_description"],
+            os.path.join(args.environment_folder, "saved_scenes.yaml")
+        )
 
     except Exception as e:
-        print(e)
-        logging.error("Suffered other exception " + str(e))
+        rospy.logerr("Suffered other exception " + str(e))
         sys.exit(-1)
     except:
-        logging.error("Suffered totally unknown exception! Probably sim.")
+        rospy.logerr("Suffered totally unknown exception! Probably sim.")
 
 def do_main_loop(args):
-    if not args.no_hydra:
-        rospy.init_node('run_interaction', anonymous=False)
-    logging.basicConfig(level=logging.INFO)
+    rospy.init_node('run_interaction', anonymous=False)
     for k in range(10):
         collect_placement(args)
-
-        
 
 if __name__ == "__main__":
     args = setup_args()
