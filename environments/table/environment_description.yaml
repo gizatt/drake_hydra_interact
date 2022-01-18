@@ -1,0 +1,72 @@
+world_description:
+  has_ground: True
+  models:
+    - model_file: "misc/cafe_table/model.sdf"
+      root_body_name: "link"
+      pose:
+        xyz: [0.0, 0., 0.]
+        rpy: [0., 0., 0.]
+occurance:
+  code: |
+    def get_objects(yaml_info):
+      objects = []
+
+      # First decide # of place settings.
+      n_people = np.random.randint(1, 5)
+      place_setting_keys = ["teacup", "personal_plate"]
+      for k in range(n_people):
+        for key in place_setting_keys:
+          if np.random.random() > 0.1:
+            objects.append(deepcopy(yaml_info["placeable_objects"][key]))
+
+      # Spawn a random number of the independent items
+      # based on how many people are present
+      independent_object_keys = [
+        "serving_bowl", "serving_plate", "teapot"
+      ]
+      for key in independent_object_keys:
+        n = np.random.randint(0, {1: 2, 2: 2, 3:3, 4:3}[n_people])
+        objects.append(deepcopy(yaml_info["placeable_objects"][key]))
+
+      # Spawn a random number of steamers, with no more tops than bottoms
+      n_steamer_bottoms = np.random.randint(0, 8)
+      n_steamer_tops = np.random.randint(0, min(4, n_steamer_bottoms+1))
+      for k in range(n_steamer_bottoms):
+        objects.append(deepcopy(yaml_info["placeable_objects"]["steamer_bottom"]))
+      for k in range(n_steamer_tops):
+        objects.append(deepcopy(yaml_info["placeable_objects"]["steamer_top"]))
+
+      return objects
+
+  #                0   1   2   3   4   5   6   7
+  obj_count_dist: [0., 0.5, 0.25, 1., 1., 1.]
+
+placeable_objects:
+  serving_bowl:
+    model_file: "plates_cups_and_bowls/bowls/Threshold_Porcelain_Serving_Bowl_Coupe_White/model_simplified.sdf"
+    metadata:
+      class: "serving_bowl"
+  personal_plate:
+    model_file: "plates_cups_and_bowls/plates/Threshold_Bistro_Ceramic_Dinner_Plate_Ruby_Ring/model_simplified.sdf"
+    metadata:
+      class: "personal_plate"
+  serving_plate:
+    model_file: "plates_cups_and_bowls/plates/Threshold_Dinner_Plate_Square_Rim_White_Porcelain/model_simplified.sdf"
+    metadata:
+      class: "serving_plate"
+  teacup:
+    model_file: "plates_cups_and_bowls/cups/coffee_cup_white/model_simplified.sdf"
+    metadata:
+      class: "teacup"
+  teapot:
+    model_file: "plates_cups_and_bowls/cups/Threshold_Porcelain_Teapot_White/model_simplified.sdf"
+    metadata:
+      class: "teapot"
+  steamer_bottom:
+    model_file: "misc/steamer_bottom/model.sdf"
+    metadata:
+      class: "steamer_bottom"
+  steamer_top:
+    model_file: "misc/steamer_top/model.sdf"
+    metadata:
+      class: "steamer_top"

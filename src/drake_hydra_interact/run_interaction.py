@@ -98,6 +98,35 @@ def add_ground(mbp):
         ground_body, RigidTransform.Identity(), ground_shape, "ground_col",
         CoulombFriction(0.9, 0.8))
 
+    # Add some walls to keep stuff from rolling or bouncing out
+    x_wall_shape = Box(1., 10., 1.)
+    mbp.RegisterVisualGeometry(
+        ground_body, RigidTransform(p=[-4, 0., 2.]), x_wall_shape, "wall_nx_vis",
+        np.array([0.5, 0.5, 0.5, 1.]))
+    mbp.RegisterCollisionGeometry(
+        ground_body, RigidTransform(p=[-4, 0., 2.]), x_wall_shape, "wall_nx_col",
+        CoulombFriction(0.9, 0.8))
+    mbp.RegisterVisualGeometry(
+        ground_body, RigidTransform(p=[4, 0., 2.]), x_wall_shape, "wall_px_vis",
+        np.array([0.5, 0.5, 0.5, 1.]))
+    mbp.RegisterCollisionGeometry(
+        ground_body, RigidTransform(p=[4, 0., 2.]), x_wall_shape, "wall_px_col",
+        CoulombFriction(0.9, 0.8))
+    y_wall_shape = Box(10., 1., 1.)
+    mbp.RegisterVisualGeometry(
+        ground_body, RigidTransform(p=[0, -4, 2.]), y_wall_shape, "wall_ny_vis",
+        np.array([0.5, 0.5, 0.5, 1.]))
+    mbp.RegisterCollisionGeometry(
+        ground_body, RigidTransform(p=[0., -4, 2.]), y_wall_shape, "wall_ny_col",
+        CoulombFriction(0.9, 0.8))
+    mbp.RegisterVisualGeometry(
+        ground_body, RigidTransform(p=[0., 4, 2.]), y_wall_shape, "wall_py_vis",
+        np.array([0.5, 0.5, 0.5, 1.]))
+    mbp.RegisterCollisionGeometry(
+        ground_body, RigidTransform(p=[0., 4, 2.]), y_wall_shape, "wall_py_col",
+        CoulombFriction(0.9, 0.8))
+
+
 def add_model(mbp, parser, name, model_path, tf, fixed, root_body_name=None):
     # Adds model from model_path to the mbp. Returns a list of
     # body ids added to the model. root_body_name (or an automatically-determined
@@ -160,18 +189,36 @@ def collect_placement(args):
                 tf=tf, fixed=True, root_body_name=root_body_name
             )
 
-        # Decide how many objects to spawn.
-        count_weights = np.array(yaml_info["occurance"]["obj_count_dist"])
-        count_weights /= count_weights.sum()
-        n_objects = np.random.choice(range(len(count_weights)), p=count_weights)
-        rospy.loginfo("Sampling %d objects" % n_objects)
+        # Check "occurance" entry to see how we'll decide how many
+        # items to spawn.
+        # If we have a "code" block, just run that.
 
-        # Pick a random object n_object times.
-        objects = []
-        n_available_objects = len(yaml_info["placeable_objects"])
-        for k in range(n_objects):
-            obj_k = np.random.randint(n_available_objects)
-            objects.append(deepcopy(yaml_info["placeable_objects"][obj_k]))
+        occurance_info = yaml_info["occurance"]
+        if "code" in occurance_info.keys():
+            code_block = occurance_info["code"]
+            logging.warning("I'm running code straight out of your YAML file, beware!")
+            # Expect this to define a "get_objects" function that takes the yaml_info
+            # as its sole arg. Need to pass globals() so that the function that is
+            # defined gets put into scope so we can call it.
+            print("Executing ", code_block)
+            exec(code_block, globals())
+            objects = get_objects(yaml_info)
+
+        elif "obj_count_dist" in occurance_info.keys():
+            # Decide how many objects to spawn.
+            count_weights = np.array(occurance_info["obj_count_dist"])
+            count_weights /= count_weights.sum()
+            n_objects = np.random.choice(range(len(count_weights)), p=count_weights)
+            rospy.loginfo("Sampling %d objects" % n_objects)
+
+            # Pick a random object n_object times.
+            objects = []
+            n_available_objects = len(yaml_info["placeable_objects"])
+            for k in range(n_objects):
+                obj_k = np.random.randint(n_available_objects)
+                objects.append(deepcopy(yaml_info["placeable_objects"][obj_k]))
+        else:
+            raise ValueError("Expected 'code' or 'obj_count_dist' rate info in env description yaml.")
 
         # Add objects to the sim in a -y/+y line.
         all_manipulable_body_ids = []
@@ -180,7 +227,7 @@ def collect_placement(args):
             y_offset = ((k + 1) // 2) * 0.25  # [ 0, .2, .2, .4, .4, ...]
             y_offset *= (k % 2)*2. - 1. # [0, .2, -.2, .4, -.4, ...]
             tf = RigidTransform(
-                p=np.array([0., y_offset, 0.2]),
+                p=np.array([-1, y_offset, 0.3]),
                 # Not true uniform random rotations, but it's not important here
                 rpy=RollPitchYaw(np.random.uniform(0., 2*np.pi, size=3))
             )
